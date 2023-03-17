@@ -1,0 +1,218 @@
+---
+title: "Effect of Fare on Survival - Titanic Dataset Model Evaluation"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Install the packages
+```{r eval=FALSE}
+install.packages('tidyverse')
+# install.packages('tidyr')
+install.packages('vctrs')
+update.packages('vctrs')  # fixing package issue
+install.packages('foreign')
+install.packages('ggplot2')
+install.packages('stargazer')
+install.packages('effects')
+install.packages('rsample')
+install.packages('glmnet')
+update.packages('rsample')
+install.packages('pROC')
+```
+
+
+## Load the Packages
+
+```{r}
+library(tidyverse)  # R package for data wrangling
+library(dplyr)  # for data wrangling
+library(foreign)  # package to load external data
+library(ggplot2)  # package for data visualization in R
+library(stargazer)  # package to create statistical tables in R
+library(effects)  # package to plot marginal effects of regression models
+library(rsample)  # will be used to split data into various samples
+library(glmnet)
+library(pROC)  # package to calculate ROC AUC score
+```
+
+
+## Load the Titanic2 data set
+
+```{r}
+df <- read.csv('titanic2.csv')  # load dataset
+head(df)  # view first few samples of the data
+```
+
+
+## a. Estimate a logit model of passengers survival
+The dependent variable is *survived*. The independent variables are *fare, female* and *child*.
+
+```{r}
+# Subset the dataset to the variables of interest
+titanic_data <- df %>%
+  select(survived, fare, female, child)
+
+# Check for missing values
+any(is.na(titanic_data))
+
+# Remove missing values
+titanic_data <- titanic_data[complete.cases(titanic_data), ]
+
+# Train logistic regression algorithm
+logit_model <- glm(survived ~ fare + female + child, data=titanic_data, family=binomial)
+
+# View summary of the model
+summary(logit_model)
+```
+
+
+## b. View the distribution of the fare variable
+```{r warning=FALSE}
+ggplot(titanic_data, aes(x = fare)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "lightblue") +
+  labs(x = "Fare", y = "Count", title = "Distribution of Fare")
+```
+
+The *fare* variable is right skewed.
+
+We train the another logistic regression model after transforming the *fare* variable using log(fare + 1). We add one to the fare value, because log(0) is undefined. There are some fare with the value 0.
+
+
+```{r}
+# Train another logistic regression algorithm
+logit_model_2 <- glm(survived ~ female + child + I(log(fare + 1)), data=titanic_data, family=binomial)
+
+# View summary of the model
+summary(logit_model_2)
+```
+
+
+## c. Summarize the Results of the Two logistic regression models using the stargazer package
+
+```{r warning=FALSE}
+# Summarize model results with stargazer
+stargazer(logit_model, logit_model_2, type = "text")
+```
+
+
+## d. According to the model fit statistics, which model performs the better? 
+
+From the model statistics given, we can see that the log likelihood of Model 2 is higher (-524.620) than that of Model 1 (-528.894), indicating a better fit. Additionally, the AIC value of Model 2 (1,057.241) is lower than that of Model 1 (1,065.788), indicating that Model 2 is a better fit than Model 1.
+
+
+## e. Produce two effect graphs that show the substantive effect of fare on passenger survival
+
+One of the plots is based on the first model and the other based on the second model.
+The other independent variables will be kept constant at their median value.
+
+```{r}
+# Set median values for other independent variables
+med_female <- median(titanic_data$female)
+med_child <- median(titanic_data$child)
+
+# Create effects objects for each model
+eff1 <- allEffects(logit_model, xlevels= list(fare = seq(0, 500, 10), child=med_child, female=med_female))
+eff2 <- allEffects(logit_model_2, xlevels = list(fare = seq(0, 500, 10), child=med_child, female=med_female))
+
+# Plot the effects
+plot(eff1[[1]], xlim = c(0, 500), main="Substantive Effect of Fare on Survival (Model 1)")
+```
+
+
+```{r}
+plot(eff2[[3]], xlim = c(0, 500), main="Substantive Effect of Fare on Survival (Model 2)")
+```
+
+
+## f. Plot Summary
+The graph with the original fare variable suggests that the effect of fare on survival is linear. That is, for every one unit increase in fare, the log odds of survival increase by a constant amount or that the change in the dependent variable (survival) is proportional to the change in the independent variable (fare).
+
+On the other hand, the graph with the logged fare variable suggests that the effect of fare is non-linear. That is, the log odds of survival increase at an increasing rate as fare increases or that the change in the dependent variable is not proportional to the change in the independent variable. Based on the model fit statistics, we should believe the second story to be more plausible.
+
+
+## g.  Comparing ROC curves with and without the logged fare variable.
+
+Split the data into the training set and test set. Use 80% of the data for the training set. Evaluate the ROC curve of the model. Let's see if the logged fare variable has a substantial efect on the passenger survival.
+
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into a training set (80%) and a test set (20%)
+split <- initial_split(titanic_data, prop = 0.8)
+train_data <- training(split)
+test_data <- testing(split)
+
+# Fit a logit model without the logged fare variable on the training set
+model_no_fare <- glm(survived ~ female + child, data=train_data, family=binomial(link="logit"))
+# # Make predictions on the test set using the fitted model
+# predictions <- predict(model_no_fare, newdata=test_data, type="response")
+# # Calculate the area under the ROC curve for the model without the logged fare variable
+# roc_auc_no_fare <- pROC::roc(test_data$survived, predictions)$auc
+
+# Fit a logit model with the logged fare variable on the training set
+model_fare <- glm(survived ~ female + child + I(log(fare + 1)), data=train_data, family=binomial(link="logit"))
+# # Make predictions on the test set using the fitted model
+# predictions_fare <- predict(model_fare, newdata = test_data, type="response")
+# # Calculate the area under the ROC curve for the model with the logged fare variable
+# roc_auc_fare <- pROC::roc(test_data$survived, predictions_fare)$auc
+
+# # Compare the area under the ROC curve for the two models
+# cat("AUC without fare variable:", roc_auc_no_fare, "\n")
+# cat("AUC with fare variable:", roc_auc_fare, "\n")
+```
+
+
+## h. Compare the two models to see the effect of the fare variable
+
+```{r warning=FALSE}
+# Summarize model results with stargazer
+stargazer(model_no_fare, model_fare, type="text")
+```
+
+
+## i. ROC curves for these two models 
+
+```{r warning=FALSE}
+# We assume the test set is not available and make predictions on the training set
+
+# Make predictions on the training set using the fitted model
+predictions_no_fare <- predict(model_no_fare, type="response")
+# Calculate the area under the ROC curve for the model without the logged fare variable
+roc_no_fare <- roc(train_data$survived, predictions_no_fare)
+
+# Make predictions on the training set using the fitted model
+predictions_fare <- predict(model_fare, type="response")
+# Calculate the area under the ROC curve for the model with the logged fare variable
+roc_fare <- roc(train_data$survived, predictions_fare)
+
+# Plot the ROC curves for the two models on the same graph
+plot(roc_no_fare, col="red", main="ROC curves for logistic regression models [fare variable]")[0]
+lines(roc_fare, col="blue")
+legend("bottomright", legend=c("No fare variable", "With fare variable"), col=c("red", "blue"), lty=1)
+```
+
+
+## j. AUC Score for the two models
+
+```{r}
+# Calculate the AUC scores for the two models
+auc_no_fare <- auc(roc_no_fare)
+auc_fare <- auc(roc_fare)
+
+# Print the AUC scores for the two models
+cat("AUC without fare variable:", auc_no_fare, "\n")
+cat("AUC with fare variable:", auc_fare, "\n")
+```
+
+
+## k. Conclusion
+
+Based on the ROC curves and AUC scores, we can conclude that the model with the fare variable performs better than the model without the fare variable. This is because the ROC curve for the model with the fare variable is higher and closer to the top left corner of the graph, which indicates better performance. Additionally, the AUC score for the model with the fare variable is higher than the AUC score for the model without the fare variable, further supporting this conclusion.
